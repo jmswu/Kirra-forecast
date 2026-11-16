@@ -1,59 +1,172 @@
-# Kirra forecast scraper
+# Kirra freedive forecast
 
-Scrapes date, wind, and swell data from the
-[surf-forecast.com Kirra page](https://www.surf-forecast.com/breaks/Kirra/forecasts/latest).
-No third-party packages required (Python 3.9+).
+A background monitor and rule-based 48-hour freedive outlook for Kirra,
+Gold Coast. It combines BOM wind observations with surf-forecast.com wind and
+swell data, then applies the local freediver heuristics:
 
-## Usage
+- Best conditions follow a few days of gentle southerly winds.
+- Swell under 1m is workable.
+- Swell under 0.5m is worth swimming out to the reef for a look.
+- There is never a guarantee.
+
+No third-party Python packages are required.
+
+## Quick start
 
 ```bash
-# 7-day forecast, CSV to stdout
-python3 kirra_forecast.py
+# Generate the latest report now
+python3 kirra_monitor.py
 
-# Save to a file
-python3 kirra_forecast.py -o kirra_forecast.csv
+# Open the HTML dashboard
+python3 kirra_monitor.py --open
 
-# 48-hour detailed forecast (every 3 hours)
-python3 kirra_forecast.py --hourly
-
-# JSON instead of CSV
-python3 kirra_forecast.py --json
-
-# Another break on the same site (set the local timezone too)
-python3 kirra_forecast.py \
-  --url https://www.surf-forecast.com/breaks/Snapper-Rocks/forecasts/latest/six_day \
-  --tz Australia/Brisbane
+# Install the macOS background job
+python3 kirra_monitor.py --install
 ```
 
-Default range is the 7-day table with three forecasts per day (9am, 3pm, 9pm
-local time). `--hourly` uses the 48-hour table, which has a forecast every
-3 hours.
+The background job starts at login and runs every **6 hours** at
+**00:05, 06:05, 12:05, 18:05** local time. It needs no terminal window open.
 
-## Output columns
+```bash
+python3 kirra_monitor.py --status
+python3 kirra_monitor.py --uninstall
+python3 kirra_monitor.py --test-notification
+python3 kirra_monitor.py --test-ntfy
+python3 kirra_monitor.py --setup-email
+python3 kirra_monitor.py --test-email
+```
 
-| Column | Meaning |
+## What it produces
+
+- `reports/latest.html` — colour-coded dashboard for a browser
+- `reports/latest.md` — readable Markdown version
+- `reports/latest.json` — machine-readable report
+- `data/state.json` — last run, verdict and alert de-duplication
+- `data/history.jsonl` — one compact record per monitor run
+- `data/bom_cache.json` — last successful BOM observations (fallback)
+- `logs/launchd.out.log` and `logs/launchd.err.log` — background logs
+
+The monitor alerts **only** when a new **REEF** or **GOOD** window appears:
+
+- a macOS notification,
+- a phone push through [ntfy](https://ntfy.sh), and
+- an SMTP email through Python's `smtplib` (no Mail.app involved).
+
+There is no daily summary, so quiet days stay quiet. Night blocks are shown in
+the report but never trigger alerts.
+
+### Phone alerts
+
+Install the free **ntfy** app on your phone and subscribe to the topic in
+`alerts.ntfy.topic` in `config.json`. To print it:
+
+```bash
+python3 -c "import json; print(json.load(open('config.json'))['alerts']['ntfy']['topic'])"
+```
+
+The topic is effectively a private channel: anyone who knows it can read it,
+so do not publish it. Keep `config.json` private if you push this repo.
+
+### Email over SMTP
+
+The email path uses `smtplib`, not your email client. Gmail requires an
+**App Password**:
+
+1. Turn on 2-Step Verification in your Google Account.
+2. Google Account → Security → App passwords.
+3. Create an App Password for “Mail” / “Kirra forecast”.
+4. Run:
+
+```bash
+python3 kirra_monitor.py --setup-email
+```
+
+Paste the 16-character App Password when prompted. The non-secret settings are
+written to `config.json`; the password is stored separately at
+`~/.config/kirra-forecast/smtp.json` with mode `600`. It is not in this repo.
+
+The default SMTP settings are `smtp.gmail.com:587` with STARTTLS, sending from
+and to `wu.zhuhua@gmail.com`. Until an App Password is configured, email alerts
+are skipped with a clear log message; phone alerts through ntfy still work.
+Test email with:
+
+```bash
+python3 kirra_monitor.py --test-email
+```
+
+If you use a different mail provider, change the host, port and security mode
+in `config.json` during or after setup.
+
+## Forecast rules
+
+The defaults live in `config.json`.
+
+### Past 72 hours — BOM Coolangatta
+
+- Southerly sector: **135°–225°** (SE through SW)
+- Gentle wind: **≤ 20 km/h**
+- Setup **PASS**: at least **50%** of observations are gentle southerly
+  **and** the longest continuous run is at least **24 hours**
+- Otherwise `PARTIAL` or `FAIL`
+
+### Next 48 hours — surf-forecast.com
+
+| Swell | Meaning |
 | --- | --- |
-| `datetime_local` | Forecast time with its UTC offset |
-| `date`, `time` | Local date and 24-hour time |
-| `wind_speed_kmh` | Wind speed in km/h |
-| `wind_direction` | 16-point compass direction the wind is coming **from** |
-| `wind_direction_deg` | Direction in degrees clockwise from true north |
-| `swell_height_m` | Combined open-water swell height in metres |
-| `swell_direction` | 16-point compass direction the swell is coming **from** |
-| `swell_direction_deg` | Direction in degrees clockwise from true north |
-| `swell_period_s` | Swell period in seconds |
+| < 0.5m | **REEF** — worth a look |
+| 0.5–0.99m | **GOOD** if the southerly setup passed |
+| 1.0–1.49m | **WATCH** |
+| ≥ 1.5m | **NO** |
 
-The site normally serves metric units; the scraper converts mph/ft to km/h/m if
-the page is served in imperial units.
+- **GOOD** also requires a gentle southerly wind at that time.
+- **REEF** is downgraded to **WATCH** if the wind is strong (> 25 km/h).
+- `WATCH` is the catch-all for “close but not the pattern the freediver described.”
+- Daylight is approximated as 05:00–18:00 AEST for alerting.
+
+All thresholds are configurable. For example, to require a literal 48-hour
+southerly run, set `antecedent_min_run_hours` to `48` in `config.json`.
+
+## Data sources
+
+- **Wind history:** Bureau of Meteorology, Coolangatta station `94592`
+  ([JSON observations](https://www.bom.gov.au/fwo/IDQ60801/IDQ60801.94592.json)).
+  This is the same BOM wind data used by Willyweather.
+- **Wind and swell forecast:** [surf-forecast.com Kirra](https://www.surf-forecast.com/breaks/Kirra/forecasts/latest).
+  Its swell row is NOAA WaveWatch III, the same underlying swell source used by
+  Willyweather.
+- The 7-day surf-forecast table supplies a “next potential” note beyond the
+  48-hour window.
+
+Willyweather’s forecast charts are JavaScript-rendered, so this app uses the
+underlying BOM/NOAA data directly instead of scraping those charts.
+
+## Scraper CLI
+
+The original scraper still works independently:
+
+```bash
+python3 kirra_forecast.py                 # 7-day CSV to stdout
+python3 kirra_forecast.py --hourly        # 48-hour / 3-hourly CSV
+python3 kirra_forecast.py -o kirra.csv
+python3 kirra_forecast.py --json
+```
+
+## Tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
 
 ## Notes
 
-- Forecast times are the site's local time. Kirra is `Australia/Brisbane`
-  (AEST, UTC+10, no daylight saving), which is the default.
-- The swell row on this page is surf-forecast.com's combined open-water swell
-  (NOAA WaveWatch III), not the height of waves breaking at the beach.
-- The page layout is parsed by its `data-row` attributes and table structure.
-  If surf-forecast.com changes its markup, the script exits with a clear error
-  rather than writing bad data.
-- Be considerate when automating: cache the CSV and run it a few times per day,
-  not in a tight loop.
+- This is a deterministic rule-based outlook, not an AI forecast. The report
+  shows the evidence and lets you judge it.
+- Forecasts change. The background job refreshes every 6 hours; the HTML
+  report is overwritten each time and history is appended for audit.
+- If you move the project folder, re-run `python3 kirra_monitor.py --install`
+  so the LaunchAgent points at the new path.
+- If BOM is unavailable, a cache is used for up to 6 hours. Older than that,
+  the southerly setup is treated as unknown rather than guessed.
+- If surf-forecast is unavailable, the last successful report is kept and the
+  error is logged.
+- This is guidance, not a guarantee. Check the water and your own limits.

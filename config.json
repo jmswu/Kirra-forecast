@@ -1,0 +1,57 @@
+{
+  "location": {
+    "name": "Kirra",
+    "timezone": "Australia/Brisbane",
+    "bom_station_url": "https://www.bom.gov.au/fwo/IDQ60801/IDQ60801.94592.json",
+    "bom_attribution": "Bureau of Meteorology, Coolangatta (station 94592)"
+  },
+  "sources": {
+    "forecast_url": "https://www.surf-forecast.com/breaks/Kirra/forecasts/latest",
+    "seven_day_url": "https://www.surf-forecast.com/breaks/Kirra/forecasts/latest/six_day"
+  },
+  "rules": {
+    "southerly_min_deg": 135,
+    "southerly_max_deg": 225,
+    "gentle_max_kmh": 20,
+    "strong_wind_kmh": 25,
+    "antecedent_window_hours": 72,
+    "antecedent_min_fraction": 0.5,
+    "antecedent_min_run_hours": 24,
+    "antecedent_partial_fraction": 0.3,
+    "antecedent_partial_run_hours": 12,
+    "antecedent_min_observations": 12,
+    "observation_gap_minutes": 90,
+    "sample_minutes": 30,
+    "swell_reef_max_m": 0.5,
+    "swell_good_max_m": 1.0,
+    "swell_no_min_m": 1.5,
+    "forecast_hours": 48,
+    "block_hours": 3,
+    "daylight_start_hour": 5,
+    "daylight_end_hour": 18
+  },
+  "monitor": {
+    "interval_hours": 6,
+    "notify": true,
+    "max_observation_age_hours": 6
+  },
+  "alerts": {
+    "macos": true,
+    "ntfy": {
+      "enabled": true,
+      "server": "https://ntfy.sh",
+      "topic": "kirra-forecast-4970d9e853d80e74"
+    },
+    "email": {
+      "enabled": true,
+      "host": "smtp.gmail.com",
+      "port": 587,
+      "security": "starttls",
+      "username": "wu.zhuhua@gmail.com",
+      "from": "wu.zhuhua@gmail.com",
+      "to": "wu.zhuhua@gmail.com",
+      "password_env": "KIRRA_SMTP_PASSWORD",
+      "password_file": "~/.config/kirra-forecast/smtp.json"
+    }
+  }
+}
