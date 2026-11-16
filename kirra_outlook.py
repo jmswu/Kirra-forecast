@@ -531,6 +531,7 @@ def build_report(
     rules: dict,
     sources: dict,
     seven_day: list[dict] | None = None,
+    tides: list[dict] | None = None,
     stale_hours: float | None = None,
 ) -> dict:
     antecedent = summarize_antecedent(observations, rules, end=now)
@@ -539,6 +540,12 @@ def build_report(
         antecedent["note"] += f" BOM cache is {stale_hours:.1f}h old."
 
     outlook = build_outlook(blocks, antecedent, rules, now)
+    tide_horizon = now + timedelta(hours=float(rules.get("forecast_hours", 48)))
+    tide_events = [
+        event for event in (tides or [])
+        if now <= event["time"] <= tide_horizon
+    ]
+
     next_potential = None
     next_potential_note = None
     if seven_day is None:
@@ -568,6 +575,8 @@ def build_report(
         "best_window": outlook["best_window"],
         "alert": outlook["alert"],
         "range": outlook["range"],
+        "tides": tide_events,
+        "next_tide": tide_events[0] if tide_events else None,
         "next_potential": next_potential,
         "next_potential_note": next_potential_note,
         "rules": rules,
@@ -660,6 +669,22 @@ def render_markdown(report: dict) -> str:
     if not report["blocks"]:
         lines.append("| - | - | - | - | - | No forecast blocks. |")
 
+    lines += [
+        "",
+        "## Tides (next 48 hours)",
+        "",
+        "| Tide | Time | Height |",
+        "| --- | --- | --- |",
+    ]
+    if report.get("tides"):
+        for event in report["tides"]:
+            lines.append(
+                f"| {event['type'].title()} | {_fmt_time(event['time'])} | "
+                f"{_fmt_num(event['height_m'], 2, 'm')} |"
+            )
+    else:
+        lines.append("| - | - | No tide data available. |")
+
     lines += ["", "## Call", ""]
     if report["best_window"]:
         window = report["best_window"]
@@ -721,6 +746,7 @@ def render_markdown(report: dict) -> str:
         f"- Wind history: {report['sources'].get('bom_attribution', 'Bureau of Meteorology')}",
         f"- Forecast: {report['sources'].get('forecast_url', 'surf-forecast.com')}",
         "- Swell data: NOAA WaveWatch III via surf-forecast.com",
+        "- Tide times/heights: surf-forecast.com",
         "",
         (
             "_This is a rule-based outlook built from local freediver experience. "
@@ -778,6 +804,20 @@ def render_html(report: dict) -> str:
     if not rows:
         rows.append("<tr><td colspan=\"6\">No forecast blocks available.</td></tr>")
 
+    tide_rows = []
+    for event in report.get("tides", []):
+        tide_rows.append(
+            "<tr><td><strong>{kind}</strong></td><td>{time}</td><td>{height}</td></tr>".format(
+                kind=event["type"].title(),
+                time=_fmt_time(event["time"]),
+                height=_fmt_num(event["height_m"], 2, "m"),
+            )
+        )
+    if not tide_rows:
+        tide_rows.append(
+            "<tr><td colspan=\"3\" class=\"muted\">No tide data available.</td></tr>"
+        )
+
     alert_class = report["verdict_level"]
     stale_html = ""
     if stale is not None and stale > 0:
@@ -820,6 +860,62 @@ def render_html(report: dict) -> str:
             f" (gust {_fmt_num(latest.get('gust_kmh'), 0, ' km/h')})"
         )
 
+    if report.get("next_tide"):
+        tide = report["next_tide"]
+        next_tide_html = (
+            f"<div class=\"tide-next\">{tide['type'].title()} "
+            f"<small>{tide['time'].strftime('%a %H:%M')}</small></div>"
+            f"<div class=\"muted\">{_fmt_num(tide['height_m'], 2, 'm')}</div>"
+        )
+    else:
+        next_tide_html = "<p class=\"muted\">No tide data.</p>"
+
+    sidebar_html = f"""
+<aside class="sidebar" aria-label="Rating legend">
+  <section class="legend-card">
+    <h2>Rating guide</h2>
+    <div class="legend-list">
+      <div class="legend-item">
+        <span class="pill reef">REEF</span>
+        <div>
+          <strong>Under {rule['swell_reef_max_m']:g}m</strong>
+          <p>Worth a look at the reef. Alert sent.</p>
+        </div>
+      </div>
+      <div class="legend-item">
+        <span class="pill good">GOOD</span>
+        <div>
+          <strong>Under {rule['swell_good_max_m']:g}m</strong>
+          <p>Southerly setup passed and the wind is a gentle southerly. Alert sent.</p>
+        </div>
+      </div>
+      <div class="legend-item">
+        <span class="pill watch">WATCH</span>
+        <div>
+          <strong>Close, but not on</strong>
+          <p>No actionable window yet. No alert.</p>
+        </div>
+      </div>
+      <div class="legend-item">
+        <span class="pill no">NO</span>
+        <div>
+          <strong>{rule['swell_no_min_m']:g}m or more</strong>
+          <p>Too much swell, or strong wind. No alert.</p>
+        </div>
+      </div>
+    </div>
+    <div class="legend-note">
+      <strong>Alerts:</strong> only REEF and GOOD send a macOS, ntfy or email
+      alert. Night blocks never alert. Tide is shown for planning, not scored.
+    </div>
+  </section>
+  <section class="legend-card">
+    <h2>Next tide</h2>
+    {next_tide_html}
+  </section>
+</aside>
+"""
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -850,7 +946,58 @@ def render_html(report: dict) -> str:
     color: var(--ink);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   }}
-  main {{ max-width: 1040px; margin: 0 auto; padding: 28px 18px 48px; }}
+  .page {{
+    max-width: 1340px;
+    margin: 0 auto;
+    padding: 28px 18px 48px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 280px;
+    grid-template-areas: "hero side" "main side";
+    gap: 20px;
+    align-items: start;
+  }}
+  header {{
+    grid-area: hero;
+  }}
+  main {{ grid-area: main; min-width: 0; }}
+  .sidebar {{
+    grid-area: side;
+    position: sticky;
+    top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }}
+  .legend-card {{
+    background: white;
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+  }}
+  .sidebar h2 {{ margin: 0 0 10px; font-size: 15px; }}
+  .legend-list {{ display: flex; flex-direction: column; gap: 11px; }}
+  .legend-item {{ display: flex; gap: 9px; align-items: flex-start; }}
+  .legend-item .pill {{ flex: 0 0 auto; margin-top: 2px; }}
+  .legend-item strong {{ display: block; font-size: 13px; }}
+  .legend-item p {{
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.45;
+  }}
+  .legend-note {{
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 12px;
+    line-height: 1.5;
+  }}
+  .legend-note strong {{ color: var(--ink); }}
+  .sidebar .badge {{ margin-top: 0; }}
+  .sidebar .legend-headline {{ font-size: 13px; color: var(--muted); margin: 8px 0 0; }}
+  .tide-next {{ font-size: 22px; font-weight: 700; margin-top: 2px; }}
+  .tide-next small {{ font-size: 13px; color: var(--muted); font-weight: 500; }}
   header {{
     background: linear-gradient(135deg, #082f49, #0b4f6c);
     color: white;
@@ -901,6 +1048,7 @@ def render_html(report: dict) -> str:
     overflow-x: auto;
   }}
   table {{ width: 100%; border-collapse: collapse; min-width: 760px; }}
+  table.tide-table {{ min-width: 420px; }}
   th, td {{ text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }}
   th {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }}
   tr:last-child td {{ border-bottom: 0; }}
@@ -928,17 +1076,26 @@ def render_html(report: dict) -> str:
   }}
   .two {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }}
   footer {{ color: var(--muted); font-size: 12px; margin-top: 30px; line-height: 1.7; }}
+  @media (max-width: 1100px) {{
+    .page {{
+      grid-template-columns: 1fr;
+      grid-template-areas: "hero" "side" "main";
+    }}
+    .sidebar {{ position: static; }}
+    .legend-list {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }}
+  }}
   @media (max-width: 760px) {{
     .grid, .two {{ grid-template-columns: 1fr 1fr; }}
     header h1 {{ font-size: 23px; }}
   }}
   @media (max-width: 480px) {{
     .grid, .two {{ grid-template-columns: 1fr; }}
+    .legend-list {{ grid-template-columns: 1fr; }}
   }}
 </style>
 </head>
 <body>
-<main>
+<div class="page">
   <header>
     <h1>Kirra freedive outlook</h1>
     <div class="sub">Generated {report['generated_at'].strftime('%A %d %B %Y, %I:%M %p %Z')} &middot; rule-based local outlook</div>
@@ -946,6 +1103,7 @@ def render_html(report: dict) -> str:
     <p class="headline">{e(report['headline'])}</p>
   </header>
 
+  <main>
   {stale_html}
 
   <div class="grid">
@@ -988,6 +1146,14 @@ def render_html(report: dict) -> str:
     </table>
   </div>
 
+  <h2>Tides (next 48 hours)</h2>
+  <div class="panel">
+    <table class="tide-table">
+      <thead><tr><th>Tide</th><th>Time (AEST)</th><th>Height</th></tr></thead>
+      <tbody>{''.join(tide_rows)}</tbody>
+    </table>
+  </div>
+
   <div class="two">
     <div>
       <h2>Best window</h2>
@@ -1014,9 +1180,13 @@ def render_html(report: dict) -> str:
     <div>Wind history: {e(report['sources'].get('bom_attribution', 'Bureau of Meteorology'))}</div>
     <div>Forecast: {e(report['sources'].get('forecast_url', 'surf-forecast.com'))}</div>
     <div>Swell: NOAA WaveWatch III via surf-forecast.com</div>
+    <div>Tide times/heights: surf-forecast.com</div>
     <div>This is a rule-based outlook built from local freediver experience. It is guidance, not a guarantee. Check the water and your own limits.</div>
   </footer>
-</main>
+  </main>
+
+  {sidebar_html}
+</div>
 </body>
 </html>
 """

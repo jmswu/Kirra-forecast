@@ -1,8 +1,8 @@
 # Kirra freedive forecast
 
 A background monitor and rule-based 48-hour freedive outlook for Kirra,
-Gold Coast. It combines BOM wind observations with surf-forecast.com wind and
-swell data, then applies the local freediver heuristics:
+Gold Coast. It combines BOM wind observations with surf-forecast.com wind,
+swell and tide data, then applies the local freediver heuristics:
 
 - Best conditions follow a few days of gentle southerly winds.
 - Swell under 1m is workable.
@@ -40,7 +40,7 @@ python3 kirra_monitor.py --test-email
 
 - `reports/latest.html` — colour-coded dashboard for a browser
 - `reports/latest.md` — readable Markdown version
-- `reports/latest.json` — machine-readable report
+- `reports/latest.json` — machine-readable report, including tide events
 - `data/state.json` — last run, verdict and alert de-duplication
 - `data/history.jsonl` — one compact record per monitor run
 - `data/bom_cache.json` — last successful BOM observations (fallback)
@@ -123,6 +123,9 @@ The defaults live in `config.json`.
 - `WATCH` is the catch-all for “close but not the pattern the freediver described.”
 - Daylight is approximated as 05:00–18:00 AEST for alerting.
 
+The report also lists the next 48 hours of high/low tides. Tide is shown for
+dive planning; it does not change the REEF/GOOD rating yet.
+
 All thresholds are configurable. For example, to require a literal 48-hour
 southerly run, set `antecedent_min_run_hours` to `48` in `config.json`.
 
@@ -134,6 +137,8 @@ southerly run, set `antecedent_min_run_hours` to `48` in `config.json`.
 - **Wind and swell forecast:** [surf-forecast.com Kirra](https://www.surf-forecast.com/breaks/Kirra/forecasts/latest).
   Its swell row is NOAA WaveWatch III, the same underlying swell source used by
   Willyweather.
+- **Tide times/heights:** surf-forecast.com’s high/low tide rows in the same
+  table (next 48 hours).
 - The 7-day surf-forecast table supplies a “next potential” note beyond the
   48-hour window.
 
@@ -147,6 +152,8 @@ The original scraper still works independently:
 ```bash
 python3 kirra_forecast.py                 # 7-day CSV to stdout
 python3 kirra_forecast.py --hourly        # 48-hour / 3-hourly CSV
+python3 kirra_forecast.py --tides         # high/low tide events CSV
+python3 kirra_forecast.py --tides --hourly
 python3 kirra_forecast.py -o kirra.csv
 python3 kirra_forecast.py --json
 ```

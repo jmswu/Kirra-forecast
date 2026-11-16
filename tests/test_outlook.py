@@ -4,8 +4,11 @@ from zoneinfo import ZoneInfo
 
 from kirra_outlook import (
     build_outlook,
+    build_report,
     compass_to_degrees,
     evaluate_block,
+    render_html,
+    render_markdown,
     summarize_antecedent,
 )
 
@@ -176,6 +179,34 @@ class OutlookTests(unittest.TestCase):
         outlook = build_outlook(blocks, {"status": "pass"}, RULES, now)
         self.assertEqual(outlook["verdict"], "NO WINDOW")
         self.assertIsNone(outlook["alert"])
+
+
+class ReportTests(unittest.TestCase):
+    def test_tides_are_filtered_and_included(self):
+        now = datetime(2026, 11, 17, 9, 0, tzinfo=TZ)
+        observations = observation_series(now, "S", 10, 72)
+        tides = [
+            {"time": now - timedelta(hours=2), "type": "high", "height_m": 1.5},
+            {"time": now + timedelta(hours=4), "type": "low", "height_m": 0.5},
+            {"time": now + timedelta(hours=50), "type": "high", "height_m": 1.6},
+        ]
+        report = build_report(
+            [block(10, 0.8)],
+            observations,
+            now,
+            RULES,
+            {"location": "Kirra"},
+            tides=tides,
+        )
+        self.assertEqual(len(report["tides"]), 1)
+        self.assertEqual(report["next_tide"]["type"], "low")
+        markdown = render_markdown(report)
+        html = render_html(report)
+        self.assertIn("Tides (next 48 hours)", markdown)
+        self.assertIn("Tides (next 48 hours)", html)
+        self.assertIn("Rating guide", html)
+        self.assertIn("No actionable window yet", html)
+        self.assertIn("0.50m", markdown)
 
 
 if __name__ == "__main__":

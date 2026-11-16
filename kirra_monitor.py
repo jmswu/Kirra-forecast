@@ -49,7 +49,7 @@ from kirra_forecast import (
     SIX_DAY_SUFFIX,
     ScrapeError,
     fetch,
-    scrape,
+    scrape_page,
 )
 from kirra_outlook import (
     build_report,
@@ -285,6 +285,16 @@ def records_to_blocks(records: list[dict]) -> list[dict]:
     return blocks
 
 
+def merge_tides(*tide_lists: list[dict]) -> list[dict]:
+    merged: dict[tuple[str, str], dict] = {}
+    for tides in tide_lists:
+        for event in tides or []:
+            key = (event["time"].isoformat(timespec="minutes"), event["type"])
+            if key not in merged:
+                merged[key] = event
+    return sorted(merged.values(), key=lambda event: event["time"])
+
+
 def source_metadata(config: dict) -> dict:
     return {
         "location": config["location"]["name"],
@@ -339,6 +349,14 @@ def append_history(report: dict) -> None:
                 "alertable": window["alertable"],
             }
             if window else None
+        ),
+        "next_tide": (
+            {
+                "time": report["next_tide"]["time"].isoformat(timespec="minutes"),
+                "type": report["next_tide"]["type"],
+                "height_m": report["next_tide"]["height_m"],
+            }
+            if report.get("next_tide") else None
         ),
     }
     with open(DATA_DIR / "history.jsonl", "a", encoding="utf-8") as handle:
@@ -683,14 +701,19 @@ def run_cycle(args, config: dict) -> int:
 
     log(f"Fetching surf forecast for {config['location']['name']}...")
     try:
-        records = scrape(config["sources"]["forecast_url"], timezone)
+        forecast_page = scrape_page(config["sources"]["forecast_url"], timezone)
     except ScrapeError as exc:
         log(f"ERROR: {exc}")
         return 1
+    records = forecast_page["records"]
+    tides = forecast_page.get("tides", [])
 
     seven_day_records = None
+    seven_day_tides = []
     try:
-        seven_day_records = scrape(config["sources"]["seven_day_url"], timezone)
+        seven_day_page = scrape_page(config["sources"]["seven_day_url"], timezone)
+        seven_day_records = seven_day_page["records"]
+        seven_day_tides = seven_day_page.get("tides", [])
     except ScrapeError as exc:
         log(f"WARNING: 7-day context unavailable: {exc}")
 
@@ -752,6 +775,7 @@ def run_cycle(args, config: dict) -> int:
         config["rules"],
         source_metadata(config),
         seven_day=seven_day,
+        tides=merge_tides(tides, seven_day_tides),
         stale_hours=stale_hours,
     )
 

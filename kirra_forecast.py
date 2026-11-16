@@ -11,6 +11,8 @@ Examples:
     python3 kirra_forecast.py -o kirra_forecast.csv    # CSV to a file
     python3 kirra_forecast.py --json                   # JSON to stdout
     python3 kirra_forecast.py --hourly                 # 48h / 3-hourly table
+    python3 kirra_forecast.py --tides                  # high/low tide events
+    python3 kirra_forecast.py --tides --hourly         # 48h tide events
     python3 kirra_forecast.py --url <url>              # another forecast page
 
 The site shows forecast times in local time. Kirra is AEST (UTC+10); use
@@ -29,7 +31,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from datetime import time as dt_time
 from html.parser import HTMLParser
 from zoneinfo import ZoneInfo
 
@@ -63,6 +66,7 @@ FIELDS = [
     "swell_direction_deg",
     "swell_period_s",
 ]
+TIDE_FIELDS = ["datetime_local", "date", "time", "type", "height_m"]
 
 
 class ScrapeError(RuntimeError):
@@ -74,7 +78,7 @@ class ScrapeError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 class Node:
-    __slots__ = ("tag", "attrs", "children")
+    __slots__ = ("attrs", "children", "tag")
 
     def __init__(self, tag: str, attrs: dict[str, str] | None = None):
         self.tag = tag
@@ -255,7 +259,77 @@ def parse_swell(cell: Node, height_factor: float) -> tuple[float | None, str, fl
     return height, direction, degrees, period
 
 
-def scrape(url: str, timezone: ZoneInfo) -> list[dict]:
+def parse_tides(
+    rows: dict[str, Node],
+    column_dates: list[str],
+    hours: list[int],
+    timezone: ZoneInfo,
+    height_factor: float,
+) -> list[dict]:
+    """Extract high/low tide events from the forecast table.
+
+    Tide cells are sparse: each event sits in the time column closest to it.
+    The column's date can be one day off for an overnight event, so pick the
+    nearest of yesterday/today/tomorrow for each event.
+    """
+    events: dict[tuple[str, str], dict] = {}
+    for row_name, tide_type in (("tide-high", "high"), ("tide-low", "low")):
+        row = rows.get(row_name)
+        if row is None:
+            continue
+        for index, cell in enumerate(direct_cells(row)):
+            if index >= len(column_dates) or index >= len(hours):
+                break
+            time_node = cell.find(cls="tide-time__time")
+            height_node = cell.find(cls="tide-time__height")
+            if time_node is None or height_node is None:
+                continue
+            time_text = time_node.text().replace(" ", "").upper()
+            unit_node = cell.find(cls="tide-time__units")
+            event_unit = unit_node.text().strip().lower() if unit_node else ""
+            event_height_factor = (
+                0.3048 if event_unit in ("ft", "feet") else 1.0
+            ) if event_unit else height_factor
+            try:
+                if "AM" in time_text or "PM" in time_text:
+                    event_time = datetime.strptime(  # noqa: DTZ007
+                        time_text, "%I:%M%p"
+                    ).time()
+                else:
+                    event_time = datetime.strptime(  # noqa: DTZ007
+                        time_text, "%H:%M"
+                    ).time()
+                height = float(height_node.text())
+            except ValueError:
+                continue
+
+            column_date = date.fromisoformat(column_dates[index])
+            column_dt = datetime.combine(
+                column_date, dt_time(hour=hours[index]), tzinfo=timezone
+            )
+            candidates = [
+                column_date + timedelta(days=offset) for offset in (-1, 0, 1)
+            ]
+            event_date = min(
+                candidates,
+                key=lambda candidate: abs(
+                    (
+                        datetime.combine(candidate, event_time, tzinfo=timezone)
+                        - column_dt
+                    ).total_seconds()
+                ),
+            )
+            event_dt = datetime.combine(event_date, event_time, tzinfo=timezone)
+            key = (event_dt.isoformat(timespec="minutes"), tide_type)
+            events[key] = {
+                "time": event_dt,
+                "type": tide_type,
+                "height_m": round(height * event_height_factor, 2),
+            }
+    return sorted(events.values(), key=lambda event: event["time"])
+
+
+def scrape_page(url: str, timezone: ZoneInfo) -> dict:
     markup = fetch(url)
     root = parse_html(markup)
 
@@ -330,7 +404,14 @@ def scrape(url: str, timezone: ZoneInfo) -> list[dict]:
 
     if not records:
         raise ScrapeError("No forecast rows were parsed; the site layout may have changed.")
-    return records
+
+    tides = parse_tides(rows, column_dates, hours, timezone, height_factor)
+    return {"records": records, "tides": tides}
+
+
+def scrape(url: str, timezone: ZoneInfo) -> list[dict]:
+    """Backwards-compatible record-only scraper."""
+    return scrape_page(url, timezone)["records"]
 
 
 # ---------------------------------------------------------------------------
@@ -343,14 +424,38 @@ def write_csv(records: list[dict], stream) -> None:
     writer.writerows(records)
 
 
+def tide_export_rows(tides: list[dict]) -> list[dict]:
+    return [
+        {
+            "datetime_local": event["time"].isoformat(timespec="minutes"),
+            "date": event["time"].date().isoformat(),
+            "time": event["time"].strftime("%H:%M"),
+            "type": event["type"],
+            "height_m": event["height_m"],
+        }
+        for event in tides
+    ]
+
+
+def write_tide_csv(rows: list[dict], stream) -> None:
+    writer = csv.DictWriter(stream, fieldnames=TIDE_FIELDS, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Scrape date, wind and swell data from surf-forecast.com."
+        description="Scrape date, wind, swell and tide data from surf-forecast.com."
     )
     parser.add_argument(
         "--hourly",
         action="store_true",
         help="use the 48-hour detailed table (3-hourly) instead of the 7-day table",
+    )
+    parser.add_argument(
+        "--tides",
+        action="store_true",
+        help="output high/low tide events instead of wind/swell rows",
     )
     parser.add_argument(
         "--url",
@@ -378,12 +483,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         timezone = ZoneInfo(args.tz)
-    except Exception:
+    except Exception:  # noqa: BLE001 - ZoneInfo raises several error types
         print(f"error: unknown timezone '{args.tz}'", file=sys.stderr)
         return 1
 
     try:
-        records = scrape(url, timezone)
+        if args.tides:
+            records = tide_export_rows(scrape_page(url, timezone)["tides"])
+        else:
+            records = scrape(url, timezone)
     except ScrapeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -396,13 +504,14 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print(output)
     else:
+        writer = write_tide_csv if args.tides else write_csv
         if args.out:
             # BOM so Excel opens the CSV as UTF-8.
             with open(args.out, "w", encoding="utf-8-sig", newline="") as handle:
-                write_csv(records, handle)
+                writer(records, handle)
         else:
             buffer = io.StringIO()
-            write_csv(records, buffer)
+            writer(records, buffer)
             sys.stdout.write(buffer.getvalue())
 
     if args.out:
