@@ -7,10 +7,9 @@ from kirra_outlook import (
     build_report,
     compass_to_degrees,
     evaluate_block,
+    render_combined_chart,
     render_html,
     render_markdown,
-    render_tide_chart,
-    render_wind_chart,
     summarize_antecedent,
 )
 
@@ -205,19 +204,18 @@ class ReportTests(unittest.TestCase):
         markdown = render_markdown(report)
         html = render_html(report)
         self.assertIn("Tides (next 48 hours)", markdown)
-        self.assertIn("Wind — next 48 hours", html)
-        self.assertIn("Tide — next 48 hours", html)
+        self.assertIn("Swell, wind &amp; tide — next 48 hours", html)
         self.assertIn("<svg class=\"chart\"", html)
         self.assertIn("Show wind speed &amp; direction details", html)
-        self.assertIn("Show tide chart &amp; times", html)
+        self.assertIn("Show tide times &amp; heights", html)
         self.assertIn("Rating guide", html)
         self.assertIn("No actionable window yet", html)
         self.assertIn("0.50m", markdown)
-        wind_chart = render_wind_chart(report)
-        tide_chart = render_tide_chart(report)
-        self.assertIn("wind-arrow", wind_chart)
-        self.assertIn("tide-marker", tide_chart)
-        self.assertIn("L 0.50m", tide_chart)
+        combined_chart = render_combined_chart(report)
+        self.assertIn("wind-arrow", combined_chart)
+        self.assertIn("swell-line", combined_chart)
+        self.assertIn("tide-line", combined_chart)
+        self.assertIn("tide-marker", combined_chart)
 
 
 if __name__ == "__main__":

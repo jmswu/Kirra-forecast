@@ -770,9 +770,9 @@ def _html_rating_class(rating: str) -> str:
 
 
 CHART_WIDTH = 860
-CHART_HEIGHT = 280
+CHART_HEIGHT = 320
 CHART_LEFT = 48
-CHART_RIGHT = 18
+CHART_RIGHT = 62
 CHART_TOP = 26
 CHART_BOTTOM = 52
 CHART_PLOT_WIDTH = CHART_WIDTH - CHART_LEFT - CHART_RIGHT
@@ -806,113 +806,6 @@ def _chart_label(moment: datetime) -> str:
     return moment.strftime("%H:%M")
 
 
-def render_wind_chart(report: dict) -> str:
-    rules = report["rules"]
-    start = report["generated_at"]
-    end = start + timedelta(hours=float(rules.get("forecast_hours", 48)))
-    blocks = [
-        block for block in report.get("blocks", [])
-        if block.get("wind_speed_kmh") is not None
-        and start <= block["time"] <= end
-    ]
-    if not blocks:
-        return "<p class=\"muted\">No wind data in the next 48 hours.</p>"
-
-    max_speed = max(float(block["wind_speed_kmh"]) for block in blocks)
-    step = 5 if max_speed <= 20 else 10 if max_speed <= 40 else 15
-    y_max = max(step * 2, math.ceil(max_speed / step) * step)
-    points = [
-        (
-            _chart_x(block["time"], start, end),
-            _chart_y(float(block["wind_speed_kmh"]), 0, y_max),
-        )
-        for block in blocks
-    ]
-    line_path = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in points)
-    area_path = (
-        line_path
-        + f" L {points[-1][0]:.1f},{CHART_TOP + CHART_PLOT_HEIGHT:.1f}"
-        + f" L {points[0][0]:.1f},{CHART_TOP + CHART_PLOT_HEIGHT:.1f} Z"
-    )
-
-    parts = [
-        (
-            f"<svg class=\"chart\" viewBox=\"0 0 {CHART_WIDTH} {CHART_HEIGHT}\" "
-            "role=\"img\" aria-label=\"Wind speed and direction over the next 48 hours\">"
-        ),
-        "<title>Wind speed and direction, next 48 hours</title>",
-        "<desc>Line shows wind speed in km/h. Arrows show the direction the wind is blowing toward.</desc>",
-        (
-            f"<rect x=\"{CHART_LEFT}\" y=\"{CHART_TOP}\" width=\"{CHART_PLOT_WIDTH}\" "
-            f"height=\"{CHART_PLOT_HEIGHT}\" fill=\"#f8fbfd\"/>"
-        ),
-    ]
-
-    for value in range(0, y_max + 1, step):
-        y = _chart_y(value, 0, y_max)
-        parts.append(
-            f"<line class=\"grid\" x1=\"{CHART_LEFT}\" y1=\"{y:.1f}\" "
-            f"x2=\"{CHART_LEFT + CHART_PLOT_WIDTH}\" y2=\"{y:.1f}\"/>"
-        )
-        parts.append(
-            f"<text class=\"axis\" x=\"{CHART_LEFT - 8}\" y=\"{y + 4:.1f}\" "
-            f"text-anchor=\"end\">{value}</text>"
-        )
-
-    for tick in _chart_ticks(start, end, 6):
-        x = _chart_x(tick, start, end)
-        parts.append(
-            f"<line class=\"grid\" x1=\"{x:.1f}\" y1=\"{CHART_TOP}\" "
-            f"x2=\"{x:.1f}\" y2=\"{CHART_TOP + CHART_PLOT_HEIGHT}\"/>"
-        )
-        parts.append(
-            f"<text class=\"axis\" x=\"{x:.1f}\" y=\"{CHART_TOP + CHART_PLOT_HEIGHT + 18}\" "
-            f"text-anchor=\"middle\">{_chart_label(tick)}</text>"
-        )
-
-    parts.extend([
-        f"<path class=\"wind-area\" d=\"{area_path}\"/>",
-        f"<path class=\"wind-line\" d=\"{line_path}\"/>",
-    ])
-
-    for block, (x, y) in zip(blocks, points):
-        speed = float(block["wind_speed_kmh"])
-        direction = block.get("wind_direction") or ""
-        title = (
-            f"{block['time'].strftime('%a %d %b %H:%M')} - "
-            f"wind from {direction or '?'} at {speed:g} km/h"
-        )
-        degrees = block.get("wind_direction_deg")
-        if degrees is not None:
-            rotation = (float(degrees) + 180.0) % 360.0
-            parts.append(
-                f"<g class=\"wind-arrow\" transform=\"translate({x:.1f} {y:.1f}) "
-                f"rotate({rotation:.1f})\">"
-                f"<title>{html.escape(title)}</title>"
-                "<polygon points=\"0,-12 6,2 0,-2 -6,2\" "
-                "stroke=\"#f8fbfd\" stroke-width=\"1\"/>"
-                "</g>"
-            )
-        else:
-            parts.append(
-                f"<circle cx=\"{x:.1f}\" cy=\"{y:.1f}\" r=\"3\" fill=\"#1d5fd1\">"
-                f"<title>{html.escape(title)}</title></circle>"
-            )
-
-    parts.extend([
-        (
-            f"<text class=\"axis\" x=\"{CHART_LEFT - 8}\" y=\"{CHART_TOP - 9}\" "
-            "text-anchor=\"end\">km/h</text>"
-        ),
-        (
-            f"<text class=\"axis\" x=\"{CHART_LEFT + CHART_PLOT_WIDTH}\" "
-            f"y=\"{CHART_HEIGHT - 10}\" text-anchor=\"end\">AEST</text>"
-        ),
-        "</svg>",
-    ])
-    return "".join(parts)
-
-
 def _tide_height_at(moment: datetime, events: list[dict]) -> float | None:
     if not events:
         return None
@@ -931,124 +824,223 @@ def _tide_height_at(moment: datetime, events: list[dict]) -> float | None:
     return None
 
 
-def render_tide_chart(report: dict) -> str:
+def _height_axis_label(value: float) -> str:
+    label = f"{value:.2f}".rstrip("0").rstrip(".")
+    if "." not in label:
+        label += ".0"
+    return f"{label}m"
+
+
+def render_combined_chart(report: dict) -> str:
     rules = report["rules"]
     start = report["generated_at"]
     end = start + timedelta(hours=float(rules.get("forecast_hours", 48)))
-    events = [
-        event for event in (report.get("all_tides") or report.get("tides") or [])
-        if event.get("height_m") is not None
+    blocks = [
+        block for block in report.get("blocks", [])
+        if start <= block["time"] <= end
     ]
-    events.sort(key=lambda event: event["time"])
-    if len(events) < 2:
-        return "<p class=\"muted\">Not enough tide data to draw a curve.</p>"
-
-    samples = []
-    total_minutes = 48 * 60
-    for minute in range(0, total_minutes + 1, 15):
-        moment = start + timedelta(minutes=minute)
-        height = _tide_height_at(moment, events)
-        if height is not None:
-            samples.append((moment, height))
-    if len(samples) < 2:
-        return "<p class=\"muted\">Not enough tide data to draw a curve.</p>"
-
-    low = min(height for _, height in samples)
-    high = max(height for _, height in samples)
-    padding = max(0.1, (high - low) * 0.12)
-    y_low = math.floor((low - padding) * 10) / 10
-    y_high = math.ceil((high + padding) * 10) / 10
-    if y_high - y_low < 0.3:
-        y_high = y_low + 0.3
-    step = 0.5 if y_high - y_low >= 1.0 else 0.25 if y_high - y_low >= 0.5 else 0.1
-
-    points = [
-        (
-            _chart_x(moment, start, end),
-            _chart_y(height, y_low, y_high),
-        )
-        for moment, height in samples
+    wind_blocks = [
+        block for block in blocks if block.get("wind_speed_kmh") is not None
     ]
-    line_path = "M " + " L ".join(f"{x:.1f},{y:.1f}" for x, y in points)
-    area_path = (
-        line_path
-        + f" L {points[-1][0]:.1f},{CHART_TOP + CHART_PLOT_HEIGHT:.1f}"
-        + f" L {points[0][0]:.1f},{CHART_TOP + CHART_PLOT_HEIGHT:.1f} Z"
+    swell_blocks = [
+        block for block in blocks if block.get("swell_height_m") is not None
+    ]
+    tide_events = sorted(
+        [
+            event for event in (report.get("all_tides") or report.get("tides") or [])
+            if event.get("height_m") is not None
+        ],
+        key=lambda event: event["time"],
     )
+    if not wind_blocks and not swell_blocks and len(tide_events) < 2:
+        return "<p class=\"muted\">No wind, swell or tide data in the next 48 hours.</p>"
+
+    max_wind = max(
+        (float(block["wind_speed_kmh"]) for block in wind_blocks),
+        default=0.0,
+    )
+    wind_max = max(20, math.ceil(max_wind / 10) * 10)
+    height_values = [
+        float(block["swell_height_m"]) for block in swell_blocks
+    ] + [float(event["height_m"]) for event in tide_events]
+    height_max = max(1.5, math.ceil(max(height_values, default=1.5) * 2) / 2)
+    if height_values and max(height_values) > height_max - 0.1:
+        height_max += 0.5
+    height_min = 0.0
+    if height_values and min(height_values) < 0:
+        height_min = math.floor(min(height_values) * 10) / 10
+
+    def x(moment: datetime) -> float:
+        return _chart_x(moment, start, end)
+
+    def y_wind(value: float) -> float:
+        return _chart_y(value, 0, wind_max)
+
+    def y_height(value: float) -> float:
+        return _chart_y(value, height_min, height_max)
+
+    plot_right = CHART_LEFT + CHART_PLOT_WIDTH
+    plot_bottom = CHART_TOP + CHART_PLOT_HEIGHT
 
     parts = [
         (
             f"<svg class=\"chart\" viewBox=\"0 0 {CHART_WIDTH} {CHART_HEIGHT}\" "
-            "role=\"img\" aria-label=\"Tide height over the next 48 hours\">"
+            "role=\"img\" aria-label=\"Swell, wind and tide over the next 48 hours\">"
         ),
-        "<title>Tide height, next 48 hours</title>",
-        "<desc>Smooth curve of tide height with high and low tide markers.</desc>",
+        "<title>Swell, wind and tide, next 48 hours</title>",
+        (
+            "<desc>Blue line is wind speed and arrows show downwind direction. "
+            "Green line is swell height. Teal curve is tide height.</desc>"
+        ),
         (
             f"<rect x=\"{CHART_LEFT}\" y=\"{CHART_TOP}\" width=\"{CHART_PLOT_WIDTH}\" "
             f"height=\"{CHART_PLOT_HEIGHT}\" fill=\"#f8fbfd\"/>"
         ),
     ]
 
-    tick_value = math.ceil(y_low / step) * step
-    while tick_value <= y_high + 1e-9:
-        y = _chart_y(tick_value, y_low, y_high)
+    for value in range(0, int(wind_max) + 1, 10):
+        y = y_wind(value)
         parts.append(
             f"<line class=\"grid\" x1=\"{CHART_LEFT}\" y1=\"{y:.1f}\" "
-            f"x2=\"{CHART_LEFT + CHART_PLOT_WIDTH}\" y2=\"{y:.1f}\"/>"
+            f"x2=\"{plot_right}\" y2=\"{y:.1f}\"/>"
         )
         parts.append(
-            f"<text class=\"axis\" x=\"{CHART_LEFT - 8}\" y=\"{y + 4:.1f}\" "
-            f"text-anchor=\"end\">{tick_value:.2f}m</text>"
+            f"<text class=\"axis axis-left\" x=\"{CHART_LEFT - 8}\" "
+            f"y=\"{y + 4:.1f}\" text-anchor=\"end\">{value}</text>"
         )
-        tick_value += step
 
-    for tick in _chart_ticks(start, end, 12):
-        x = _chart_x(tick, start, end)
+    height_step = 0.5 if height_max - height_min >= 1.5 else 0.25
+    height_tick = height_min
+    while height_tick <= height_max + 1e-9:
+        y = y_height(height_tick)
         parts.append(
-            f"<line class=\"grid\" x1=\"{x:.1f}\" y1=\"{CHART_TOP}\" "
-            f"x2=\"{x:.1f}\" y2=\"{CHART_TOP + CHART_PLOT_HEIGHT}\"/>"
+            f"<line class=\"tick\" x1=\"{plot_right}\" y1=\"{y:.1f}\" "
+            f"x2=\"{plot_right + 5}\" y2=\"{y:.1f}\"/>"
         )
         parts.append(
-            f"<text class=\"axis\" x=\"{x:.1f}\" y=\"{CHART_TOP + CHART_PLOT_HEIGHT + 18}\" "
+            f"<text class=\"axis axis-right\" x=\"{plot_right + 8}\" "
+            f"y=\"{y + 4:.1f}\" text-anchor=\"start\">"
+            f"{_height_axis_label(height_tick)}</text>"
+        )
+        height_tick += height_step
+
+    for tick in _chart_ticks(start, end, 6):
+        tick_x = x(tick)
+        parts.append(
+            f"<line class=\"grid\" x1=\"{tick_x:.1f}\" y1=\"{CHART_TOP}\" "
+            f"x2=\"{tick_x:.1f}\" y2=\"{plot_bottom}\"/>"
+        )
+        parts.append(
+            f"<text class=\"axis\" x=\"{tick_x:.1f}\" y=\"{plot_bottom + 18}\" "
             f"text-anchor=\"middle\">{_chart_label(tick)}</text>"
         )
 
-    parts.extend([
-        f"<path class=\"tide-area\" d=\"{area_path}\"/>",
-        f"<path class=\"tide-line\" d=\"{line_path}\"/>",
-    ])
+    if len(tide_events) >= 2:
+        tide_samples = []
+        for minute in range(0, 48 * 60 + 1, 15):
+            moment = start + timedelta(minutes=minute)
+            height = _tide_height_at(moment, tide_events)
+            if height is not None:
+                tide_samples.append((moment, height))
+        if len(tide_samples) >= 2:
+            tide_points = [
+                (x(moment), y_height(height)) for moment, height in tide_samples
+            ]
+            tide_path = "M " + " L ".join(
+                f"{px:.1f},{py:.1f}" for px, py in tide_points
+            )
+            tide_area = (
+                tide_path
+                + f" L {tide_points[-1][0]:.1f},{plot_bottom:.1f}"
+                + f" L {tide_points[0][0]:.1f},{plot_bottom:.1f} Z"
+            )
+            parts.extend([
+                f"<path class=\"tide-area\" d=\"{tide_area}\"/>",
+                f"<path class=\"tide-line\" d=\"{tide_path}\"/>",
+            ])
+            for event in tide_events:
+                if not start <= event["time"] <= end:
+                    continue
+                marker_x = x(event["time"])
+                marker_y = y_height(float(event["height_m"]))
+                is_high = event["type"] == "high"
+                title = (
+                    f"{event['type'].title()} tide at "
+                    f"{event['time'].strftime('%a %d %b %H:%M')}, "
+                    f"{event['height_m']:.2f}m"
+                )
+                parts.append(
+                    f"<circle class=\"tide-marker\" cx=\"{marker_x:.1f}\" "
+                    f"cy=\"{marker_y:.1f}\" r=\"3.5\" "
+                    f"fill=\"{'#0e7490' if is_high else '#ffffff'}\" "
+                    f"stroke=\"#0e7490\" stroke-width=\"1.5\">"
+                    f"<title>{html.escape(title)}</title></circle>"
+                )
 
-    for event in events:
-        if not start <= event["time"] <= end:
-            continue
-        x = _chart_x(event["time"], start, end)
-        y = _chart_y(event["height_m"], y_low, y_high)
-        is_high = event["type"] == "high"
-        label = f"{'H' if is_high else 'L'} {event['height_m']:.2f}m"
-        label_y = y - 10 if is_high else y + 17
-        title = (
-            f"{event['type'].title()} tide at "
-            f"{event['time'].strftime('%a %d %b %H:%M')}, "
-            f"{event['height_m']:.2f}m"
+    if swell_blocks:
+        swell_points = [
+            (x(block["time"]), y_height(float(block["swell_height_m"])))
+            for block in swell_blocks
+        ]
+        swell_path = "M " + " L ".join(
+            f"{px:.1f},{py:.1f}" for px, py in swell_points
         )
-        parts.append(
-            f"<g class=\"tide-marker\">"
-            f"<title>{html.escape(title)}</title>"
-            f"<circle cx=\"{x:.1f}\" cy=\"{y:.1f}\" r=\"4\" "
-            f"fill=\"{'#0e7490' if is_high else '#ffffff'}\" "
-            f"stroke=\"#0e7490\" stroke-width=\"1.5\"/>"
-            f"<text class=\"tide-label\" x=\"{x:.1f}\" y=\"{label_y:.1f}\" "
-            f"text-anchor=\"middle\">{label}</text>"
-            f"</g>"
+        parts.append(f"<path class=\"swell-line\" d=\"{swell_path}\"/>")
+        for block, (px, py) in zip(swell_blocks, swell_points):
+            title = (
+                f"{block['time'].strftime('%a %d %b %H:%M')} - swell "
+                f"{block['swell_height_m']:g}m {block.get('swell_direction') or ''}"
+                f" ({block.get('swell_period_s') or '-'}s)"
+            )
+            parts.append(
+                f"<circle class=\"swell-dot\" cx=\"{px:.1f}\" cy=\"{py:.1f}\" "
+                f"r=\"3\"><title>{html.escape(title)}</title></circle>"
+            )
+
+    if wind_blocks:
+        wind_points = [
+            (x(block["time"]), y_wind(float(block["wind_speed_kmh"])))
+            for block in wind_blocks
+        ]
+        wind_path = "M " + " L ".join(
+            f"{px:.1f},{py:.1f}" for px, py in wind_points
         )
+        parts.append(f"<path class=\"wind-line\" d=\"{wind_path}\"/>")
+        for block, (px, py) in zip(wind_blocks, wind_points):
+            speed = float(block["wind_speed_kmh"])
+            direction = block.get("wind_direction") or ""
+            title = (
+                f"{block['time'].strftime('%a %d %b %H:%M')} - "
+                f"wind from {direction or '?'} at {speed:g} km/h"
+            )
+            degrees = block.get("wind_direction_deg")
+            if degrees is not None:
+                rotation = (float(degrees) + 180.0) % 360.0
+                parts.append(
+                    f"<g class=\"wind-arrow\" transform=\"translate({px:.1f} {py:.1f}) "
+                    f"rotate({rotation:.1f})\">"
+                    f"<title>{html.escape(title)}</title>"
+                    "<polygon points=\"0,-12 6,2 0,-2 -6,2\" "
+                    "stroke=\"#f8fbfd\" stroke-width=\"1\"/>"
+                    "</g>"
+                )
+            else:
+                parts.append(
+                    f"<circle cx=\"{px:.1f}\" cy=\"{py:.1f}\" r=\"3\" "
+                    f"fill=\"#1d5fd1\"><title>{html.escape(title)}</title></circle>"
+                )
 
     parts.extend([
         (
-            f"<text class=\"axis\" x=\"{CHART_LEFT - 8}\" y=\"{CHART_TOP - 9}\" "
-            "text-anchor=\"end\">m</text>"
+            f"<text class=\"axis axis-left\" x=\"{CHART_LEFT - 8}\" "
+            f"y=\"{CHART_TOP - 9}\" text-anchor=\"end\">km/h</text>"
         ),
         (
-            f"<text class=\"axis\" x=\"{CHART_LEFT + CHART_PLOT_WIDTH}\" "
+            f"<text class=\"axis axis-right\" x=\"{plot_right + 8}\" "
+            f"y=\"{CHART_TOP - 9}\" text-anchor=\"start\">m</text>"
+        ),
+        (
+            f"<text class=\"axis\" x=\"{plot_right}\" "
             f"y=\"{CHART_HEIGHT - 10}\" text-anchor=\"end\">AEST</text>"
         ),
         "</svg>",
@@ -1164,8 +1156,7 @@ def render_html(report: dict) -> str:
             f" (gust {_fmt_num(latest.get('gust_kmh'), 0, ' km/h')})"
         )
 
-    wind_chart = render_wind_chart(report)
-    tide_chart = render_tide_chart(report)
+    combined_chart = render_combined_chart(report)
 
     sidebar_html = f"""
 <aside class="sidebar" aria-label="Rating legend">
@@ -1371,11 +1362,15 @@ def render_html(report: dict) -> str:
   .chart text {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }}
   .chart .grid {{ stroke: #dce3ea; stroke-width: 1; }}
   .chart .axis {{ fill: #607080; font-size: 10px; }}
-  .chart .wind-area {{ fill: #e8f0ff; opacity: .8; }}
+  .chart .axis-left {{ fill: #1d5fd1; }}
+  .chart .axis-right {{ fill: #0e7490; }}
+  .chart .tick {{ stroke: #0e7490; stroke-width: 1; }}
   .chart .wind-line {{ fill: none; stroke: #1d5fd1; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }}
   .chart .wind-arrow {{ fill: #0b4f6c; }}
-  .chart .tide-area {{ fill: #e0f2fe; opacity: .85; }}
-  .chart .tide-line {{ fill: none; stroke: #0e7490; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }}
+  .chart .swell-line {{ fill: none; stroke: #0f9d76; stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; }}
+  .chart .swell-dot {{ fill: #0f9d76; }}
+  .chart .tide-area {{ fill: #e0f2fe; opacity: .6; }}
+  .chart .tide-line {{ fill: none; stroke: #0e7490; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }}
   .chart .tide-label {{ fill: #0e7490; font-size: 10px; font-weight: 600; }}
   .chart-legend {{
     display: flex; justify-content: space-between; gap: 10px;
@@ -1383,7 +1378,9 @@ def render_html(report: dict) -> str:
   }}
   .line-key {{ display: inline-block; width: 18px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 4px; }}
   .line-key.wind {{ background: #1d5fd1; }}
+  .line-key.swell {{ background: #0f9d76; }}
   .line-key.tide {{ background: #0e7490; }}
+  .chart-hint {{ margin-left: auto; }}
   details.details {{ margin-top: 8px; }}
   details.details summary {{
     cursor: pointer; color: #0b4f6c; font-size: 13px; font-weight: 600;
@@ -1457,13 +1454,15 @@ def render_html(report: dict) -> str:
     {antecedent['gentle_southerly_count']}/{antecedent['total_count']} observations were gentle southerly.</p>
   </div>
 
-  <h2>Wind — next 48 hours</h2>
+  <h2>Swell, wind &amp; tide — next 48 hours</h2>
   <div class="panel chart-panel">
     <div class="chart-legend">
-      <span><span class="line-key wind"></span> Wind speed</span>
-      <span>Arrows point downwind</span>
+      <span><span class="line-key wind"></span> Wind (km/h)</span>
+      <span><span class="line-key swell"></span> Swell (m)</span>
+      <span><span class="line-key tide"></span> Tide (m)</span>
+      <span class="chart-hint">Arrows point downwind</span>
     </div>
-    {wind_chart}
+    {combined_chart}
   </div>
   <details class="details">
     <summary>Show wind speed &amp; direction details</summary>
@@ -1474,17 +1473,8 @@ def render_html(report: dict) -> str:
       </table>
     </div>
   </details>
-
-  <h2>Tide — next 48 hours</h2>
   <details class="details">
-    <summary>Show tide chart &amp; times</summary>
-    <div class="panel chart-panel">
-      <div class="chart-legend">
-        <span><span class="line-key tide"></span> Tide height</span>
-        <span>Filled dots = high tide · hollow dots = low tide</span>
-      </div>
-      {tide_chart}
-    </div>
+    <summary>Show tide times &amp; heights</summary>
     <div class="panel">
       <table class="tide-table">
         <thead><tr><th>Tide</th><th>Time (AEST)</th><th>Height</th></tr></thead>
