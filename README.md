@@ -38,7 +38,9 @@ python3 kirra_monitor.py --test-email
 
 ## What it produces
 
-- `reports/latest.html` — colour-coded dashboard for a browser
+- `reports/latest.html` — colour-coded dashboard with an inline wind chart;
+  wind details and the tide chart/times are collapsed behind expandable
+  sections
 - `reports/latest.md` — readable Markdown version
 - `reports/latest.json` — machine-readable report, including tide events
 - `data/state.json` — last run, verdict and alert de-duplication

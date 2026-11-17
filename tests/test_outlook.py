@@ -9,6 +9,8 @@ from kirra_outlook import (
     evaluate_block,
     render_html,
     render_markdown,
+    render_tide_chart,
+    render_wind_chart,
     summarize_antecedent,
 )
 
@@ -203,10 +205,19 @@ class ReportTests(unittest.TestCase):
         markdown = render_markdown(report)
         html = render_html(report)
         self.assertIn("Tides (next 48 hours)", markdown)
-        self.assertIn("Tides (next 48 hours)", html)
+        self.assertIn("Wind — next 48 hours", html)
+        self.assertIn("Tide — next 48 hours", html)
+        self.assertIn("<svg class=\"chart\"", html)
+        self.assertIn("Show wind speed &amp; direction details", html)
+        self.assertIn("Show tide chart &amp; times", html)
         self.assertIn("Rating guide", html)
         self.assertIn("No actionable window yet", html)
         self.assertIn("0.50m", markdown)
+        wind_chart = render_wind_chart(report)
+        tide_chart = render_tide_chart(report)
+        self.assertIn("wind-arrow", wind_chart)
+        self.assertIn("tide-marker", tide_chart)
+        self.assertIn("L 0.50m", tide_chart)
 
 
 if __name__ == "__main__":
