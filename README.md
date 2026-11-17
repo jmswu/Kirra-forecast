@@ -36,6 +36,77 @@ python3 kirra_monitor.py --setup-email
 python3 kirra_monitor.py --test-email
 ```
 
+## Configuration
+
+The repository tracks a safe template, `config.json.example`. It contains no
+email address or ntfy topic, and phone/email alerts are disabled. The real
+`config.json` is ignored by git and is where your personal settings belong.
+
+### 1. Create your local config
+
+```bash
+cp config.json.example config.json
+```
+
+If you already have a `config.json`, keep it and use the example as a
+reference. Do not put personal settings in `config.json.example`.
+
+### 2. Alert channels
+
+The example enables macOS notifications and leaves ntfy and email off. Edit
+your local `config.json`:
+
+- **macOS only (default):** keep `alerts.macos` as `true`; leave
+  `alerts.ntfy.enabled` and `alerts.email.enabled` as `false`.
+- **Phone push with ntfy:** generate a topic:
+
+  ```bash
+  python3 -c "import secrets; print('kirra-forecast-' + secrets.token_hex(8))"
+  ```
+
+  Put it in `alerts.ntfy.topic`, set `alerts.ntfy.enabled` to `true`, then
+  install the ntfy app and subscribe to that topic. Keep the topic private.
+- **Email:** set `alerts.email.enabled` to `true`, fill in `username`, `from`,
+  and `to` (plus `host`, `port` and `security` if you are not using Gmail),
+  then run `python3 kirra_monitor.py --setup-email` to store the App Password.
+- **No alerts:** set `alerts.macos`, `alerts.ntfy.enabled` and
+  `alerts.email.enabled` to `false`. Reports will still be generated.
+
+Detailed phone and email instructions are in the sections below.
+
+### 3. Other settings
+
+| Key | Purpose |
+| --- | --- |
+| `location` | Name, timezone and BOM observation station |
+| `sources` | surf-forecast.com URLs |
+| `rules` | Wind/swell thresholds and daylight window |
+| `monitor.interval_hours` | Background check interval (default 6) |
+| `monitor.notify` | Master switch for all alerts |
+
+The background job reads `config.json` on every run, so changes take effect on
+the next run. Reinstall the LaunchAgent only if you move the project folder or
+change the config path.
+
+Validate a new config with:
+
+```bash
+python3 kirra_monitor.py --no-notify   # generate report without alerts
+python3 kirra_monitor.py --status
+```
+
+### 4. Keep secrets out of git
+
+`config.json` is in `.gitignore`. Verify it with:
+
+```bash
+git check-ignore -v config.json
+```
+
+Removing `config.json` from git does **not** remove it from earlier commits.
+If an email address, ntfy topic or App Password was pushed previously, rotate
+that secret (generate a new ntfy topic and/or Gmail App Password).
+
 ## What it produces
 
 - `reports/latest.html` — colour-coded dashboard with one combined
@@ -100,18 +171,6 @@ python3 kirra_monitor.py --test-email
 
 If you use a different mail provider, change the host, port and security mode
 in `config.json` during or after setup.
-
-## Configuration
-
-The repository ships a safe `config.json.example`. Copy it to `config.json` and
-fill in your own alert settings:
-
-```bash
-cp config.json.example config.json
-```
-
-`config.json` is ignored by git, so your email address, ntfy topic and other
-local settings stay out of version control.
 
 ## Forecast rules
 
