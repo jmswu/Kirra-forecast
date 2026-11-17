@@ -67,7 +67,8 @@ python3 -c "import json; print(json.load(open('config.json'))['alerts']['ntfy'][
 ```
 
 The topic is effectively a private channel: anyone who knows it can read it,
-so do not publish it. Keep `config.json` private if you push this repo.
+so do not publish it. `config.json` is ignored by git; commit only
+`config.json.example`.
 
 ### Email over SMTP
 
@@ -87,9 +88,10 @@ Paste the 16-character App Password when prompted. The non-secret settings are
 written to `config.json`; the password is stored separately at
 `~/.config/kirra-forecast/smtp.json` with mode `600`. It is not in this repo.
 
-The default SMTP settings are `smtp.gmail.com:587` with STARTTLS, sending from
-and to `wu.zhuhua@gmail.com`. Until an App Password is configured, email alerts
-are skipped with a clear log message; phone alerts through ntfy still work.
+The default SMTP settings are `smtp.gmail.com:587` with STARTTLS. Set the
+sending and receiving addresses in `alerts.email`. Until an App Password is
+configured, email alerts are skipped with a clear log message; phone alerts
+through ntfy still work.
 Test email with:
 
 ```bash
@@ -98,6 +100,18 @@ python3 kirra_monitor.py --test-email
 
 If you use a different mail provider, change the host, port and security mode
 in `config.json` during or after setup.
+
+## Configuration
+
+The repository ships a safe `config.json.example`. Copy it to `config.json` and
+fill in your own alert settings:
+
+```bash
+cp config.json.example config.json
+```
+
+`config.json` is ignored by git, so your email address, ntfy topic and other
+local settings stay out of version control.
 
 ## Forecast rules
 

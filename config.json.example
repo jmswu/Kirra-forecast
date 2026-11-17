@@ -38,18 +38,18 @@
   "alerts": {
     "macos": true,
     "ntfy": {
-      "enabled": true,
+      "enabled": false,
       "server": "https://ntfy.sh",
-      "topic": "kirra-forecast-4970d9e853d80e74"
+      "topic": ""
     },
     "email": {
-      "enabled": true,
+      "enabled": false,
       "host": "smtp.gmail.com",
       "port": 587,
       "security": "starttls",
-      "username": "wu.zhuhua@gmail.com",
-      "from": "wu.zhuhua@gmail.com",
-      "to": "wu.zhuhua@gmail.com",
+      "username": "",
+      "from": "",
+      "to": "",
       "password_env": "KIRRA_SMTP_PASSWORD",
       "password_file": "~/.config/kirra-forecast/smtp.json"
     }
